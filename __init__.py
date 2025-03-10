@@ -1,11 +1,12 @@
 """HomeChum EV Charging Tracker Custom Component."""
 import logging
+import asyncio
+from homeassistant.core import HomeAssistant
 
 DOMAIN = "homechum_ev_charging_tracker"
-
 _LOGGER = logging.getLogger(__name__)
 
-def setup(hass, config):
-    """Set up the HomeChum EV Charging Tracker component."""
-    _LOGGER.info("HomeChum EV Charging Tracker has been loaded successfully")
+async def async_setup(hass: HomeAssistant, config: dict):
+    """Set up the EV Charging Tracker component."""
+    _LOGGER.info("EV Charging Tracker successfully loaded")
     return True

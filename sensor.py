@@ -1,10 +1,14 @@
-from homeassistant.helpers.entity import Entity
+from homeassistant.components.sensor import SensorEntity
+from homeassistant.const import ENERGY_KILO_WATT_HOUR, CURRENCY_POUND
+import logging
+
+_LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "homechum_ev_charging_tracker"
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
+async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     """Set up the EV charging tracking sensors."""
-    add_entities([
+    async_add_entities([
         VehicleEnergyConsumptionSensor(hass),
         VehicleChargingCostSensor(hass),
         VehicleChargingSavingsSensor(hass),
@@ -15,195 +19,136 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
         VehicleOverallEfficiencySensor(hass)
     ])
 
-class VehicleEnergyConsumptionSensor(Entity):
+class BaseEVSensor(SensorEntity):
+    """Base class for EV sensors to handle error handling and state fetching."""
+    
+    def __init__(self, hass, name, unit, icon):
+        """Initialize the sensor."""
+        self.hass = hass
+        self._state = None
+        self._attr_name = name
+        self._attr_unit_of_measurement = unit
+        self._attr_icon = icon
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._state
+
+    def get_state(self, entity_id, default=0.0):
+        """Helper function to fetch sensor states safely."""
+        try:
+            state = self.hass.states.get(entity_id)
+            return float(state.state) if state and state.state not in ["unknown", "unavailable"] else default
+        except (ValueError, TypeError):
+            return default
+
+# ---- Charging Efficiency ----
+class VehicleEnergyConsumptionSensor(BaseEVSensor):
     """Sensor for Miles per kWh."""
 
     def __init__(self, hass):
-        self.hass = hass
-        self._state = None
+        super().__init__(hass, "Vehicle Miles per kWh", "mi/kWh", "mdi:car-speedometer")
 
-    @property
-    def name(self):
-        return "Vehicle Miles per kWh"
+    def update(self):
+        miles_now = self.get_state("sensor.vehicle_odometer")
+        miles_last = self.get_state("input_number.last_vehicle_odometer")
+        energy_used = self.get_state("sensor.charger_energy_used")
 
-    @property
-    def state(self):
-        """Calculate efficiency based on odometer and charger data."""
-        miles_now = float(self.hass.states.get("sensor.vehicle_odometer").state or 0)
-        miles_last = float(self.hass.states.get("input_number.last_vehicle_odometer").state or 0)
-        energy_used = float(self.hass.states.get("sensor.charger_energy_used").state or 0)
+        self._state = round((miles_now - miles_last) / energy_used, 2) if energy_used > 0 else 0
 
-        if energy_used > 0:
-            self._state = round((miles_now - miles_last) / energy_used, 2)
-        else:
-            self._state = 0
-
-        return self._state
-
-class VehicleChargingCostSensor(Entity):
+# ---- Charging Cost Calculation ----
+class VehicleChargingCostSensor(BaseEVSensor):
     """Sensor for Charging Cost per Session."""
 
     def __init__(self, hass):
-        self.hass = hass
-        self._state = None
+        super().__init__(hass, "Vehicle Charging Cost", CURRENCY_POUND, "mdi:currency-gbp")
 
-    @property
-    def name(self):
-        return "Vehicle Charging Cost"
-
-    @property
-    def state(self):
-        """Calculate session cost based on charge mode and tariff."""
-        energy_used = float(self.hass.states.get("sensor.charger_energy_used").state or 0)
+    def update(self):
+        energy_used = self.get_state("sensor.charger_energy_used")
         charge_mode = self.hass.states.get("select.charger_charge_mode").state
-        octopus_rate = float(self.hass.states.get("sensor.octopus_electricity_current_rate").state or 0)
+        octopus_rate = self.get_state("sensor.octopus_electricity_current_rate")
 
         # Use 7p/kWh for Smart Charge mode, else use Octopus dynamic rate
-        if charge_mode == "Smart Charge":
-            tariff = 0.07  # 7p/kWh
-        else:
-            tariff = octopus_rate
-
+        tariff = 0.07 if charge_mode == "Smart Charge" else octopus_rate
         self._state = round(energy_used * tariff, 2)
 
-        return self._state
-
-class VehicleChargingSavingsSensor(Entity):
+# ---- Charging Savings Calculation ----
+class VehicleChargingSavingsSensor(BaseEVSensor):
     """Sensor for tracking charging savings based on smart charging usage."""
 
     def __init__(self, hass):
-        self.hass = hass
-        self._state = None
+        super().__init__(hass, "Vehicle Charging Savings", CURRENCY_POUND, "mdi:currency-usd")
 
-    @property
-    def name(self):
-        return "Vehicle Charging Savings"
-
-    @property
-    def state(self):
-        """Calculate savings compared to peak rate charging."""
-        energy_used = float(self.hass.states.get("sensor.charger_energy_used").state or 0)
-        peak_rate = float(self.hass.states.get("sensor.octopus_electricity_current_rate").state or 0)
+    def update(self):
+        energy_used = self.get_state("sensor.charger_energy_used")
+        peak_rate = self.get_state("sensor.octopus_electricity_current_rate")
         charge_mode = self.hass.states.get("select.charger_charge_mode").state
 
-        # If Smart Charge is active, calculate savings
-        if charge_mode == "Smart Charge":
-            savings = energy_used * (peak_rate - 0.07)  # Compare with 7p/kWh
-        else:
-            savings = 0  # No savings when using normal rate
+        self._state = round(energy_used * (peak_rate - 0.07), 2) if charge_mode == "Smart Charge" else 0
 
-        self._state = round(savings, 2)
-        return self._state
-
-class PublicChargingEfficiencySensor(Entity):
+# ---- Public Charging Efficiency ----
+class PublicChargingEfficiencySensor(BaseEVSensor):
     """Sensor for Miles per kWh in Public Charging."""
 
     def __init__(self, hass):
-        self.hass = hass
-        self._state = None
+        super().__init__(hass, "Public Charge Miles per kWh", "mi/kWh", "mdi:ev-station")
 
-    @property
-    def name(self):
-        return "Public Charge Miles per kWh"
+    def update(self):
+        miles_driven = self.get_state("input_number.public_charge_miles")
+        kwh_used = self.get_state("input_number.public_charge_kwh")
 
-    @property
-    def state(self):
-        """Calculate efficiency based on user input."""
-        miles_driven = float(self.hass.states.get("input_number.public_charge_miles").state or 0)
-        kwh_used = float(self.hass.states.get("input_number.public_charge_kwh").state or 0)
+        self._state = round(miles_driven / kwh_used, 2) if kwh_used > 0 else 0
 
-        if kwh_used > 0:
-            self._state = round(miles_driven / kwh_used, 2)
-        else:
-            self._state = 0
-
-        return self._state
-
-class PublicChargingCostPerMileSensor(Entity):
+# ---- Public Charging Cost per Mile ----
+class PublicChargingCostPerMileSensor(BaseEVSensor):
     """Sensor for Cost per Mile in Public Charging."""
 
     def __init__(self, hass):
-        self.hass = hass
-        self._state = None
+        super().__init__(hass, "Public Charge Cost per Mile", CURRENCY_POUND, "mdi:ev-station")
 
-    @property
-    def name(self):
-        return "Public Charge Cost per Mile"
+    def update(self):
+        cost = self.get_state("input_number.public_charge_cost")
+        miles_driven = self.get_state("input_number.public_charge_miles")
 
-    @property
-    def state(self):
-        """Calculate cost per mile based on user input."""
-        cost = float(self.hass.states.get("input_number.public_charge_cost").state or 0)
-        miles_driven = float(self.hass.states.get("input_number.public_charge_miles").state or 0)
+        self._state = round(cost / miles_driven, 2) if miles_driven > 0 else 0
 
-        if miles_driven > 0:
-            self._state = round(cost / miles_driven, 2)
-        else:
-            self._state = 0
-
-        return self._state
-
-class VehicleTotalEnergyConsumedSensor(Entity):
+# ---- Total Energy Consumption ----
+class VehicleTotalEnergyConsumedSensor(BaseEVSensor):
     """Sensor for Total Energy Consumed (Public + Home Charging)."""
 
     def __init__(self, hass):
-        self.hass = hass
-        self._state = None
+        super().__init__(hass, "Total Energy Consumed", ENERGY_KILO_WATT_HOUR, "mdi:lightning-bolt")
 
-    @property
-    def name(self):
-        return "Total Energy Consumed (kWh)"
-
-    @property
-    def state(self):
-        """Calculate total energy consumption from all charging types."""
-        home_energy = float(self.hass.states.get("sensor.charger_energy_used").state or 0)
-        public_energy = float(self.hass.states.get("input_number.public_charge_kwh").state or 0)
+    def update(self):
+        home_energy = self.get_state("sensor.charger_energy_used")
+        public_energy = self.get_state("input_number.public_charge_kwh")
 
         self._state = round(home_energy + public_energy, 2)
-        return self._state
 
-class VehicleTotalChargingCostSensor(Entity):
+# ---- Total Charging Cost ----
+class VehicleTotalChargingCostSensor(BaseEVSensor):
     """Sensor for Total Charging Cost (Public + Home Charging)."""
 
     def __init__(self, hass):
-        self.hass = hass
-        self._state = None
+        super().__init__(hass, "Total Charging Cost", CURRENCY_POUND, "mdi:currency-gbp")
 
-    @property
-    def name(self):
-        return "Total Charging Cost (£)"
-
-    @property
-    def state(self):
-        """Calculate total charging cost across all methods."""
-        home_cost = float(self.hass.states.get("sensor.vehicle_charging_cost").state or 0)
-        public_cost = float(self.hass.states.get("input_number.public_charge_cost").state or 0)
+    def update(self):
+        home_cost = self.get_state("sensor.vehicle_charging_cost")
+        public_cost = self.get_state("input_number.public_charge_cost")
 
         self._state = round(home_cost + public_cost, 2)
-        return self._state
 
-class VehicleOverallEfficiencySensor(Entity):
+# ---- Overall Efficiency ----
+class VehicleOverallEfficiencySensor(BaseEVSensor):
     """Sensor for Overall Efficiency (Miles per kWh across all charging types)."""
 
     def __init__(self, hass):
-        self.hass = hass
-        self._state = None
+        super().__init__(hass, "Overall Efficiency", "mi/kWh", "mdi:car-speedometer")
 
-    @property
-    def name(self):
-        return "Overall Efficiency (Miles per kWh)"
+    def update(self):
+        total_miles = self.get_state("sensor.vehicle_odometer")
+        last_miles = self.get_state("input_number.last_vehicle_odometer")
+        total_energy = self.get_state("sensor.vehicle_total_energy_consumed")
 
-    @property
-    def state(self):
-        """Calculate miles per kWh including home & public charging."""
-        total_miles = float(self.hass.states.get("sensor.vehicle_odometer").state or 0)
-        last_miles = float(self.hass.states.get("input_number.last_vehicle_odometer").state or 0)
-        total_energy = float(self.hass.states.get("sensor.vehicle_total_energy_consumed").state or 0)
-
-        if total_energy > 0:
-            self._state = round((total_miles - last_miles) / total_energy, 2)
-        else:
-            self._state = 0
-
-        return self._state
+        self._state = round((total_miles - last_miles) / total_energy, 2) if total_energy > 0 else 0

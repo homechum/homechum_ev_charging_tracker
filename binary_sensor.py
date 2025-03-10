@@ -1,41 +1,54 @@
 from homeassistant.components.binary_sensor import BinarySensorEntity
 
-class VehicleChargingFailureSensor(BinarySensorEntity):
-    """Binary sensor to detect charging failures."""
+DOMAIN = "homechum_ev_charging_tracker"
 
-    def __init__(self, hass):
+async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+    """Set up the EV Charging binary sensors."""
+    async_add_entities([
+        ChargingFailureSensor(hass),
+        PublicChargingDetectionSensor(hass)
+    ])
+
+class BaseEVBinarySensor(BinarySensorEntity):
+    """Base class for binary sensors."""
+
+    def __init__(self, hass, name, icon):
+        """Initialize the binary sensor."""
         self.hass = hass
         self._state = False
-
-    @property
-    def name(self):
-        return "Vehicle EV Charging Failure Detected"
+        self._attr_name = name
+        self._attr_icon = icon
 
     @property
     def is_on(self):
-        """Detect charging failure if charger is active but no power is drawn."""
-        charger_status = self.hass.states.get("sensor.ohme_epod_status").state
-        charger_power = float(self.hass.states.get("sensor.ohme_epod_power").state or 0)
+        """Return the state of the binary sensor."""
+        return self._state
+
+    def get_state(self, entity_id, default="off"):
+        """Helper function to fetch sensor states safely."""
+        state = self.hass.states.get(entity_id)
+        return state.state if state else default
+
+class ChargingFailureSensor(BaseEVBinarySensor):
+    """Detects when charging fails (charger is active but no power is drawn)."""
+
+    def __init__(self, hass):
+        super().__init__(hass, "Charging Failure Detected", "mdi:alert-circle")
+
+    def update(self):
+        charger_status = self.get_state("sensor.charger_status", "unplugged")
+        charger_power = float(self.get_state("sensor.charger_power", 0))
 
         self._state = charger_status == "charging" and charger_power == 0
-        return self._state
-    
-class VehiclePublicChargingDetectionSensor(BinarySensorEntity):
-    """Binary sensor to detect when the vehicle is charging outside home."""
+
+class PublicChargingDetectionSensor(BaseEVBinarySensor):
+    """Detects when the vehicle is plugged into a public charger (not home)."""
 
     def __init__(self, hass):
-        self.hass = hass
-        self._state = False
+        super().__init__(hass, "Public Charging Detected", "mdi:ev-station")
 
-    @property
-    def name(self):
-        return "VW EV Public Charging Detected"
-
-    @property
-    def is_on(self):
-        """Detect public charging when the vehicle is plugged in but Ohme charger is inactive."""
-        car_plugged_in = self.hass.states.get("binary_sensor.myida_charging_cable_connected").state
-        home_charger_active = self.hass.states.get("binary_sensor.ohme_active").state
+    def update(self):
+        car_plugged_in = self.get_state("binary_sensor.vehicle_charging_cable_connected", "off")
+        home_charger_active = self.get_state("binary_sensor.charger_active", "off")
 
         self._state = car_plugged_in == "on" and home_charger_active == "off"
-        return self._state
