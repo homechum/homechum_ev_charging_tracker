@@ -2,9 +2,9 @@
   "domain": "homechum_ev_charging_tracker",
   "name": "HomeChum EV Charging Tracker",
   "version": "1.0.0",
-  "documentation": "https://github.com/homechum/ev_charging_tracker",
+  "documentation": "https://github.com/homechum/homechum_ev_charging_tracker",
   "dependencies": [],
   "codeowners": ["@homechum"],
   "requirements": [],
-  "homeassistant": "2023.3.0"
+  "iot_class": "local_polling"
 }
