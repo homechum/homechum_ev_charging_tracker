@@ -1,0 +1,15 @@
+log_public_charging:
+  description: "Log a public charging session for cost-saving analysis."
+  fields:
+    provider:
+      description: "Public charging provider (e.g., ChargePoint, BP Pulse)"
+      example: "ChargePoint"
+    kwh:
+      description: "Energy charged during the session (in kWh)"
+      example: 20.5
+    cost:
+      description: "Total cost for the charging session (£)"
+      example: 5.0
+    miles:
+      description: "Miles driven since the last home charge"
+      example: 30
