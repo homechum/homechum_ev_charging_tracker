@@ -5,6 +5,8 @@ import datetime
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.storage import Store
+from homeassistant.components.persistent_notification import create as notify_create
+from homeassistant.helpers.discovery import async_load_platform
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +25,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Save the store and data in hass.data for later use.
     hass.data.setdefault(DOMAIN, {})["store"] = store
     hass.data[DOMAIN]["public_sessions"] = data
+    hass.async_create_task(async_load_platform(hass, "sensor", DOMAIN, {}, config))
 
     async def handle_log_public_charging(call: ServiceCall) -> None:
         """Handle logging of a public charging session and store the data."""
@@ -57,7 +60,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         # async_dispatcher_send(hass, f"{DOMAIN}_update")
 
         # Create a persistent notification to confirm that the session was logged.
-        hass.components.persistent_notification.create(
+        notify_create(
+            hass,
             (
                 f"Public Charging Session Logged:\n"
                 f"Provider: {provider}\n"

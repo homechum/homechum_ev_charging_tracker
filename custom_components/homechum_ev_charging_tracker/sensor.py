@@ -1,12 +1,16 @@
 """Sensor platform for HomeChum EV Charging Tracker."""
 import logging
-
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant
 
-from . import DOMAIN
+DOMAIN = "homechum_ev_charging_tracker"
 
 _LOGGER = logging.getLogger(__name__)
+
+async def async_setup(hass, config):
+    """Set up the component via configuration.yaml."""
+    hass.helpers.discovery.load_platform("sensor", DOMAIN, {}, config)
+    return True
 
 def get_float_state(hass: HomeAssistant, entity_id: str, default: float = 0.0) -> float:
     """Helper to safely get a float value from an entity state."""
@@ -18,8 +22,9 @@ def get_float_state(hass: HomeAssistant, entity_id: str, default: float = 0.0) -
     except (ValueError, TypeError):
         return default
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
+async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     """Set up sensor entities from a config entry."""
+    _LOGGER.debug("Initializing HomeChum EV Charging Tracker sensors...")
     sensors = [
         MilesPerSocSensor(hass),
         MilesPerKwhSensor(hass),
@@ -30,7 +35,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         PublicChargingAvgCostPerKwhSensor(hass),
         PublicChargingAvgEfficiencySensor(hass),
     ]
-    async_add_entities(sensors)
+    _LOGGER.debug(f"Adding sensors: {sensors}")  # Log sensor instances
+    async_add_entities(sensors, update_before_add=True)
 
 class MilesPerSocSensor(SensorEntity):
     """Sensor: Miles per 1% State of Charge during discharge.
@@ -38,11 +44,13 @@ class MilesPerSocSensor(SensorEntity):
     This sensor computes the efficiency in terms of miles per percentage point of SOC consumed.
     If the vehicle is charging or idle (SOC is increasing or unchanged), it returns the previous computed value.
     """
-    _attr_name = "MyIDA Miles per 1% SoC"
-    _attr_unit_of_measurement = "mi/%"
 
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
+        self._attr_name = "EV Miles per 1% SoC"
+        self._attr_unique_id = "ev_miles_per_soc"
+        self._attr_unit_of_measurement = "mi/%"
+        self._attr_state = None  # Ensure state starts as None
         self._last_value = None  # Cache the last computed value
 
     @property
@@ -67,11 +75,13 @@ class MilesPerSocSensor(SensorEntity):
 
 class MilesPerKwhSensor(SensorEntity):
     """Sensor: Miles per kWh charged."""
-    _attr_name = "MyIDA Miles per kWh"
-    _attr_unit_of_measurement = "mi/kWh"
 
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
+        self._attr_name = "EV Miles per kWh"
+        self._attr_unique_id = "ev_miles_per_kwh"
+        self._attr_unit_of_measurement = "mi/kWh"
+        self._attr_state = None
 
     @property
     def state(self):
@@ -84,11 +94,13 @@ class MilesPerKwhSensor(SensorEntity):
 
 class ChargingCostPerKwhSensor(SensorEntity):
     """Sensor: Charging cost per kWh based on charging mode."""
-    _attr_name = "MyIDA Charging Cost per kWh"
-    _attr_unit_of_measurement = "£/kWh"
 
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
+        self._attr_name = "EV Charging Cost per kWh"
+        self._attr_unique_id = "ev_charging_cost_per_kwh"
+        self._attr_unit_of_measurement = "£/kWh"
+        self._attr_state = None
 
     @property
     def state(self):
@@ -99,11 +111,13 @@ class ChargingCostPerKwhSensor(SensorEntity):
 
 class ChargingCostSessionSensor(SensorEntity):
     """Sensor: Total cost of the current charging session."""
-    _attr_name = "MyIDA Charging Cost Per Session"
-    _attr_unit_of_measurement = "£"
-
+    
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
+        self._attr_name = "EV Charging Cost Per Session"
+        self._attr_unique_id = "ev_charging_cost_session"
+        self._attr_unit_of_measurement = "£"
+        self._attr_state = None
 
     @property
     def state(self):
@@ -117,11 +131,13 @@ class ChargingCostSessionSensor(SensorEntity):
 
 class OptimalChargingCostSensor(SensorEntity):
     """Sensor: Optimal charging cost per kWh (either smart or tariff based)."""
-    _attr_name = "MyIDA Optimal Charging Cost"
-    _attr_unit_of_measurement = "£/kWh"
 
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
+        self._attr_name = "EV Optimal Charging Cost"
+        self._attr_unit_of_measurement = "£/kWh"
+        self._attr_unique_id = "ev_optimal_charging_cost"
+        self._attr_state = None
 
     @property
     def state(self):
@@ -132,11 +148,13 @@ class OptimalChargingCostSensor(SensorEntity):
 
 class SavingsPerChargeSensor(SensorEntity):
     """Sensor: Potential savings per charging session."""
-    _attr_name = "MyIDA Savings Per Charge"
-    _attr_unit_of_measurement = "£"
 
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
+        self._attr_name = "EV Savings Per Charge"
+        self._attr_unit_of_measurement = "£"
+        self._attr_unique_id = "ev_savings_per_charge"
+        self._attr_state = None
 
     @property
     def state(self):
@@ -157,11 +175,13 @@ class SavingsPerChargeSensor(SensorEntity):
 
 class PublicChargingAvgCostPerKwhSensor(SensorEntity):
     """Sensor: Average cost per kWh across all manual public charging sessions."""
-    _attr_name = "Public Charging Avg Cost per kWh"
-    _attr_unit_of_measurement = "£/kWh"
 
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
+        self._attr_name = "EV Public Charging Avg Cost per kWh"
+        self._attr_unit_of_measurement = "£/kWh"
+        self._attr_unique_id = "ev_public_charging_avg_cost_per_kwh"
+        self._attr_state = None
 
     @property
     def state(self):
@@ -185,11 +205,13 @@ class PublicChargingAvgCostPerKwhSensor(SensorEntity):
 
 class PublicChargingAvgEfficiencySensor(SensorEntity):
     """Sensor: Average miles per kWh (efficiency) across manual public charging sessions."""
-    _attr_name = "Public Charging Avg Efficiency"
-    _attr_unit_of_measurement = "mi/kWh"
 
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
+        self._attr_name = "EV Public Charging Avg Efficiency"
+        self._attr_unit_of_measurement = "mi/kWh"
+        self._attr_unique_id = "ev_public_charging_efficiency"
+        self._attr_state = None
 
     @property
     def state(self):
