@@ -586,7 +586,7 @@ class PublicChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
         if not cable_plugged and session_energy > 0 and session_energy != self.last_session_energy:
             # A public charging session ended, send push notification to user for cost input
             self.last_session_energy = session_energy  # Store session energy
-            await self.send_push_notification(session_energy)
+            self.hass.loop.create_task(self.send_push_notification(session_energy))  # Schedule async call
 
         if self.last_session_energy > 0 and cost_per_kwh > 0:
             # Calculate total cost when user inputs the cost per kWh
@@ -602,7 +602,7 @@ class PublicChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
             f"Energy Used: {session_energy:.2f} kWh\n"
             "Please enter the cost per kWh in the Home Assistant app."
         )
-        self.hass.services.call(
+        await self.hass.services.async_call(
             "notify",
             "mobile_app_bharaths_iphone",
             {
