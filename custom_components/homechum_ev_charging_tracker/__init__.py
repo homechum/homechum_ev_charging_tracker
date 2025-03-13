@@ -1,6 +1,7 @@
 """HomeChum EV Charging Tracker integration."""
 import logging
 import datetime
+import os
 
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.typing import ConfigType
@@ -8,7 +9,20 @@ from homeassistant.helpers.storage import Store
 from homeassistant.components.persistent_notification import create as notify_create
 from homeassistant.helpers.discovery import async_load_platform
 
+log_dir = "/config/custom_components/homechum_ev_charging_tracker/logs"
+os.makedirs(log_dir, exist_ok=True)
+
+log_file = os.path.join(log_dir, "homechum_ev_debug.log")
 _LOGGER = logging.getLogger(__name__)
+_LOGGER.setLevel(logging.DEBUG)
+
+file_handler = logging.FileHandler(log_file, mode='a')
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+_LOGGER.addHandler(file_handler)
+
+def setup(hass, config):
+    _LOGGER.info("Initializing HomeChum EV Charging Tracker")
+    return True
 
 DOMAIN = "homechum_ev_charging_tracker"
 STORAGE_KEY = "homechum_ev_charging_tracker.public_sessions"
@@ -17,15 +31,22 @@ STORAGE_VERSION = 1
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the HomeChum EV Charging Tracker integration."""
     
+    _LOGGER.debug("Initializing HomeChum EV Charging Tracker integration...")
+
     # Initialize persistent storage for public charging sessions.
     store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
     data = await store.async_load()
     if data is None:
         data = {"sessions": []}
+
     # Save the store and data in hass.data for later use.
     hass.data.setdefault(DOMAIN, {})["store"] = store
     hass.data[DOMAIN]["public_sessions"] = data
+
+    # 🔹 Ensure Home Assistant loads the sensor and binary_sensor platforms
+    _LOGGER.debug("Loading sensor and binary sensor platforms...")
     hass.async_create_task(async_load_platform(hass, "sensor", DOMAIN, {}, config))
+    hass.async_create_task(async_load_platform(hass, "binary_sensor", DOMAIN, {}, config))
 
     async def handle_log_public_charging(call: ServiceCall) -> None:
         """Handle logging of a public charging session and store the data."""
@@ -55,10 +76,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         await store.async_save(store_data)
         hass.data[DOMAIN]["public_sessions"] = store_data
 
-        # Optional: Trigger an immediate sensor update via dispatcher or update helper.
-        # from homeassistant.helpers.dispatcher import async_dispatcher_send
-        # async_dispatcher_send(hass, f"{DOMAIN}_update")
-
         # Create a persistent notification to confirm that the session was logged.
         notify_create(
             hass,
@@ -76,5 +93,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.services.async_register(
         DOMAIN, "log_public_charging", handle_log_public_charging
     )
-    
+
+    _LOGGER.debug("HomeChum EV Charging Tracker setup complete.")
+
     return True

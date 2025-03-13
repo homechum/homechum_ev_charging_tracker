@@ -3,8 +3,9 @@ import logging
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.helpers.event import async_track_state_change
+from homeassistant.helpers.event import async_track_state_change_event
 import asyncio
+from homeassistant.helpers.entity import Entity
 
 DOMAIN = "homechum_ev_charging_tracker"
 
@@ -63,7 +64,7 @@ class ChargeToChargeEfficiencySensor(SensorEntity, RestoreEntity):
         self.last_soc = None
         self.was_charging = False  # Flag to track if actual charging occurred
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["binary_sensor.myida_charging_cable_connected", "switch.myida_charging"],  
             self.async_update_callback
@@ -117,7 +118,7 @@ class ChargeToChargeEfficiencySensor(SensorEntity, RestoreEntity):
 
         return self._attr_state  # Keep last efficiency value until next valid charge cycle
 
-class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity):
+class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity, Entity):
     """Sensor to track efficiency from drive to drive, restoring state on restart."""
 
     def __init__(self, hass: HomeAssistant):
@@ -129,18 +130,28 @@ class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity):
         self.start_miles = None
         self.start_soc = None
         self.last_state_valid = False  # Used to track if the last state was properly recorded
+        # This is a callback reference or coroutine reference:
+        self.async_update_callback = None
+        # Do NOT put `async_update_callback` in extra_state_attributes!
 
-        async_track_state_change(
+        _LOGGER.debug("DriveToDriveEfficiencySensor initialized.")
+
+        async_track_state_change_event(
             hass,
             ["binary_sensor.myida_vehicle_moving"],  # Only track when car starts or stops moving
             self.async_update_callback
         )
 
     async def async_added_to_hass(self):
+        _LOGGER.info("DriveToDriveEfficiencySensor added to Home Assistant.")
         """Restore the last known values after a restart."""
+        await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
-        if last_state and last_state.state not in (None, "unknown", "unavailable"):
-            self._attr_state = float(last_state.state)
+        if last_state not in (None, "unknown", "unavailable"):
+            try:
+                self._attr_state = float(last_state.state)
+            except (ValueError, TypeError):
+                self._attr_state = 0.0
 
     async def async_update_callback(self, entity_id, old_state, new_state):
         """Triggered when movement state changes."""
@@ -204,7 +215,7 @@ class ContinuousEfficiencySensor(SensorEntity, RestoreEntity):
         self.is_charging = False  # Track if the car is charging
         self.idle_energy_loss_detected = False  # Track if energy was lost while idle
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.myida_battery_level", "switch.myida_charging"],
             self.async_update_callback
@@ -281,7 +292,7 @@ class IdleEnergyLossSensor(SensorEntity, RestoreEntity):
         self.last_soc = None
         self.last_miles = None
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.myida_battery_level", "sensor.myida_odometer"],
             self.async_update_callback
@@ -331,7 +342,7 @@ class HomeEnergyConsumptionPerChargeSensor(SensorEntity, RestoreEntity):
         self._attr_state = 0  # Start tracking from zero
         self.is_charging = False  # Flag to track if charging session is active
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.myida_charging_power", "switch.myida_charging", "binary_sensor.myida_charging_cable_connected", "binary_sensor.ev_public_charge_detected"],
             self.async_update_callback
@@ -392,7 +403,7 @@ class TotalHomeEnergyConsumptionSensor(SensorEntity, RestoreEntity):
         self._attr_state = 0  # Start tracking from zero
         self.last_session_energy = 0  # Stores the last session energy
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.ev_home_energy_per_charge", "binary_sensor.ev_public_charge_detected", "binary_sensor.myida_charging_cable_connected"],
             self.async_update_callback
@@ -441,7 +452,7 @@ class PublicEnergyConsumptionPerSessionSensor(SensorEntity, RestoreEntity):
         self._attr_state = 0  # Start tracking from zero
         self.is_charging = False  # Track if a public charging session is active
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.myida_charging_power", "switch.myida_charging", "binary_sensor.myida_charging_cable_connected", "binary_sensor.ev_public_charge_detected"],
             self.async_update_callback
@@ -501,7 +512,7 @@ class TotalPublicEnergyConsumptionSensor(SensorEntity, RestoreEntity):
         self._attr_state = 0  # Start tracking from zero
         self.last_session_energy = 0  # Stores the last session energy
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.ev_public_energy_per_charge", "binary_sensor.ev_public_charge_detected", "binary_sensor.myida_charging_cable_connected"],
             self.async_update_callback
@@ -551,7 +562,7 @@ class PublicChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
         self.last_session_energy = 0  # Stores the last session energy
         self.hass = hass  # Home Assistant instance to send notifications
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.ev_public_energy_per_charge", "input_number.ev_public_charge_cost_per_kwh", "binary_sensor.myida_charging_cable_connected", "binary_sensor.ev_public_charge_detected"],
             self.async_update_callback
@@ -586,7 +597,7 @@ class PublicChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
         if not cable_plugged and session_energy > 0 and session_energy != self.last_session_energy:
             # A public charging session ended, send push notification to user for cost input
             self.last_session_energy = session_energy  # Store session energy
-            await self.send_push_notification(session_energy)
+            self.hass.loop.create_task(self.send_push_notification(session_energy))  # Schedule async call
 
         if self.last_session_energy > 0 and cost_per_kwh > 0:
             # Calculate total cost when user inputs the cost per kWh
@@ -602,7 +613,7 @@ class PublicChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
             f"Energy Used: {session_energy:.2f} kWh\n"
             "Please enter the cost per kWh in the Home Assistant app."
         )
-        self.hass.services.call(
+        await self.hass.services.async_call(
             "notify",
             "mobile_app_bharaths_iphone",
             {
@@ -627,7 +638,7 @@ class TotalPublicChargingCostSensor(SensorEntity, RestoreEntity):
         self._attr_state = 0  # Start tracking from zero
         self.last_session_cost = 0  # Stores the last session cost
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.ev_public_charge_cost_per_session", "binary_sensor.ev_public_charge_detected", "binary_sensor.myida_charging_cable_connected"],
             self.async_update_callback
@@ -676,7 +687,7 @@ class HomeChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
         self._attr_state = 0  # Start tracking from zero
         self.last_session_energy = 0  # Stores the last session energy
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.ev_home_energy_per_charge", "select.ohme_epod_charge_mode", "sensor.octopus_electricity_current_rate", "binary_sensor.ev_public_charge_detected", "binary_sensor.myida_charging_cable_connected"],
             self.async_update_callback
@@ -742,7 +753,7 @@ class TotalHomeChargingCostSensor(SensorEntity, RestoreEntity):
         self._attr_state = 0  # Start tracking from zero
         self.last_session_cost = 0  # Stores the last session cost
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.ev_home_charge_cost_per_session", "binary_sensor.ev_public_charge_detected", "binary_sensor.myida_charging_cable_connected"],
             self.async_update_callback
@@ -794,7 +805,7 @@ class HomeChargingSavingsPerSessionSensor(SensorEntity, RestoreEntity):
         self._attr_unit_of_measurement = "GBP"
         self._attr_state = 0  # Start tracking from zero
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.ev_home_charge_cost_per_session", "sensor.ev_home_energy_per_charge", "select.ohme_epod_charge_mode", "sensor.octopus_electricity_current_rate", "binary_sensor.ev_public_charge_detected", "binary_sensor.myida_charging_cable_connected"],
             self.async_update_callback
@@ -858,7 +869,7 @@ class TotalHomeChargingSavingsSensor(SensorEntity, RestoreEntity):
         self._attr_state = 0  # Start tracking from zero
         self.last_session_savings = 0  # Stores the last session savings
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.ev_home_charge_savings_per_session", "binary_sensor.ev_public_charge_detected", "binary_sensor.myida_charging_cable_connected"],
             self.async_update_callback
@@ -913,7 +924,7 @@ class ChargeToChargeMilesPerKWhSensor(SensorEntity, RestoreEntity):
         self.last_energy = None
         self.charging_detected = False  # Track if an actual charging session happened
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.myida_odometer", "sensor.ev_home_energy_per_charge", "sensor.ev_public_energy_per_charge", "binary_sensor.myida_charging_cable_connected", "switch.myida_charging"],
             self.async_update_callback
@@ -1002,7 +1013,7 @@ class DriveToDriveMilesPerKWhSensor(SensorEntity, RestoreEntity):
         self.last_soc = None  # Track battery level for energy estimation
         self.driving_detected = False  # Track if an actual drive session happened
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.myida_odometer", "sensor.myida_energy_used", "sensor.myida_battery_level", "binary_sensor.myida_vehicle_moving"],
             self.async_update_callback
@@ -1086,7 +1097,7 @@ class ContinuousMilesPerKWhSensor(SensorEntity, RestoreEntity):
         self.last_energy = None
         self.last_soc = None
 
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             ["sensor.myida_odometer", "sensor.myida_energy_used", "sensor.myida_battery_level", "binary_sensor.myida_vehicle_moving", "switch.myida_charging"],
             self.async_update_callback
