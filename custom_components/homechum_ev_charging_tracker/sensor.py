@@ -118,8 +118,8 @@ class ChargeToChargeEfficiencySensor(SensorEntity, RestoreEntity):
 
         return self._attr_state  # Keep last efficiency value until next valid charge cycle
 
-class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity, Entity):
-    """Sensor to track efficiency from drive to drive, restoring state on restart."""
+class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity):
+    """Sensor to track drive-to-drive efficiency, restoring state on restart."""
 
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
@@ -129,63 +129,55 @@ class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity, Entity):
         self._attr_state = None
         self.start_miles = None
         self.start_soc = None
-        self.last_state_valid = False  # Used to track if the last state was properly recorded
-        # This is a callback reference or coroutine reference:
-        self.async_update_callback = None
-        # Do NOT put `async_update_callback` in extra_state_attributes!
+        self.last_state_valid = False  # Track if the last state was valid
 
         _LOGGER.debug("DriveToDriveEfficiencySensor initialized.")
 
+        # Track changes in the vehicle's movement state
         async_track_state_change_event(
             hass,
-            ["binary_sensor.myida_vehicle_moving"],  # Only track when car starts or stops moving
+            ["binary_sensor.myida_vehicle_moving"],
             self.async_update_callback
         )
 
     async def async_added_to_hass(self):
+        """Restore last known state on restart."""
         _LOGGER.info("DriveToDriveEfficiencySensor added to Home Assistant.")
-        """Restore the last known values after a restart."""
         await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
-        if last_state not in (None, "unknown", "unavailable"):
+        if last_state and last_state.state not in ("unknown", "unavailable"):
             try:
                 self._attr_state = float(last_state.state)
-            except (ValueError, TypeError):
+            except ValueError:
                 self._attr_state = 0.0
 
     async def async_update_callback(self, entity_id, old_state, new_state):
-        """Triggered when movement state changes."""
+        """Triggered when the vehicle's movement state changes."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
     @property
     def state(self):
-        moving = self.hass.states.get("binary_sensor.myida_vehicle_moving")
+        """Determine the efficiency based on vehicle movement."""
+        moving_state = self.hass.states.get("binary_sensor.myida_vehicle_moving")
 
-        if moving is None:
-            return self._attr_state  # Return last known efficiency if we can't determine moving state
+        if moving_state is None:
+            return self._attr_state  # Return last known efficiency if state is unavailable
 
-        moving = moving.state == "on"
+        moving = moving_state.state == "on"
 
         if moving:
             if self.start_miles is None or self.start_soc is None:
-                # If the car starts moving and we don't have stored values, store them
+                # Capture starting values when the car first moves
                 self.start_miles = get_float_state(self.hass, "sensor.myida_odometer")
                 self.start_soc = get_float_state(self.hass, "sensor.myida_battery_level")
-                self.last_state_valid = False  # Reset validity since we're starting fresh
-            return self._attr_state  # Keep last known efficiency while driving
+                self.last_state_valid = False  # Reset validity
+            return self._attr_state  # Maintain last efficiency while moving
 
-        # Debounce stopping event to avoid short stops (e.g., at a red light)
-        return asyncio.create_task(self._handle_stopping())
+        # The car has stopped, calculate efficiency immediately
+        return self._calculate_efficiency()
 
-    async def _handle_stopping(self):
-        """Delays efficiency calculation to ensure the car has truly stopped."""
-        await asyncio.sleep(5)  # Wait 5 seconds to confirm the stop
-
-        moving = self.hass.states.get("binary_sensor.myida_vehicle_moving").state == "on"
-        if moving:
-            return self._attr_state  # Ignore if the car starts moving again
-
-        # If we have valid stored values, calculate efficiency
+    def _calculate_efficiency(self):
+        """Calculate efficiency immediately when the car stops."""
         if self.start_miles is not None and self.start_soc is not None:
             miles_now = get_float_state(self.hass, "sensor.myida_odometer")
             soc_now = get_float_state(self.hass, "sensor.myida_battery_level")
@@ -193,12 +185,13 @@ class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity, Entity):
             if miles_now is not None and soc_now is not None and soc_now < self.start_soc:
                 soc_used = self.start_soc - soc_now
                 miles_travelled = miles_now - self.start_miles
-                self._attr_state = round(miles_travelled / soc_used, 2) if soc_used > 0 else self._attr_state
 
-                # Mark this state as valid
-                self.last_state_valid = True
+                if soc_used > 0:
+                    self._attr_state = round(miles_travelled / soc_used, 2)
 
-        return self._attr_state  # Keep the efficiency value while parked
+                self.last_state_valid = True  # Mark the efficiency as valid
+
+        return self._attr_state  # Maintain efficiency value while stopped
 
 class ContinuousEfficiencySensor(SensorEntity, RestoreEntity):
 
