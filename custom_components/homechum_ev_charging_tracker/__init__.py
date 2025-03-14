@@ -55,8 +55,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             kwh = float(call.data.get("kwh", 0))
             cost = float(call.data.get("cost", 0))
             miles = float(call.data.get("miles", 0))
-        except (ValueError, TypeError):
-            _LOGGER.error("Invalid input data for public charging session: %s", call.data)
+        except (ValueError, TypeError) as e:
+            _LOGGER.exception("Invalid input data for public charging session: %s", call.data, e)
             return
 
         session = {

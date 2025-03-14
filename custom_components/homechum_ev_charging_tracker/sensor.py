@@ -46,7 +46,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         TotalHomeChargingSavingsSensor(hass),
         ChargeToChargeMilesPerKWhSensor(hass),
         DriveToDriveMilesPerKWhSensor(hass),
-        ContinuousMilesPerKWhSensor(hass)
+        #ContinuousMilesPerKWhSensor(hass)
     ]
     _LOGGER.debug(f"Adding sensors: {sensors}")  # Log sensor instances
     async_add_entities(sensors, update_before_add=True)
@@ -55,6 +55,7 @@ class ChargeToChargeEfficiencySensor(SensorEntity, RestoreEntity):
     """Sensor to track efficiency from charge to charge, restoring state on restart."""
 
     def __init__(self, hass: HomeAssistant):
+        """Initialize the efficiency sensor."""
         self.hass = hass
         self._attr_name = "EV Charge to Charge Efficiency"
         self._attr_unique_id = "ev_charge_to_charge_efficiency"
@@ -63,6 +64,7 @@ class ChargeToChargeEfficiencySensor(SensorEntity, RestoreEntity):
         self.last_miles = None
         self.last_soc = None
         self.was_charging = False  # Flag to track if actual charging occurred
+        _LOGGER.info("Initializing ChargeToChargeEfficiencySensor")
 
         async_track_state_change_event(
             hass,
@@ -75,13 +77,17 @@ class ChargeToChargeEfficiencySensor(SensorEntity, RestoreEntity):
         last_state = await self.async_get_last_state()
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
+            _LOGGER.info(f"Restored efficiency state: {self._attr_state}")
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when the charging cable is plugged/unplugged or charging state changes."""
+        _LOGGER.debug(f"State change detected in {entity_id}, updating efficiency sensor")
         self.async_schedule_update_ha_state(force_refresh=True)
 
     @property
     def state(self):
+        """Calculate and return the charge-to-charge efficiency."""
         cable_connected = self.hass.states.get("binary_sensor.myida_charging_cable_connected")
         charging = self.hass.states.get("switch.myida_charging")
 
@@ -106,6 +112,7 @@ class ChargeToChargeEfficiencySensor(SensorEntity, RestoreEntity):
                     soc_used = self.last_soc - soc_now
                     miles_travelled = miles_now - self.last_miles
                     self._attr_state = round(miles_travelled / soc_used, 2) if soc_used > 0 else self._attr_state
+                    _LOGGER.info(f"Updated efficiency: {self._attr_state}")
 
             # Reset charging flag since charging session is complete
             self.was_charging = False
@@ -125,7 +132,7 @@ class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "EV Drive to Drive Efficiency"
         self._attr_unique_id = "ev_drive_to_drive_efficiency"
-        self._attr_unit_of_measurement = "mi/%"
+        self._attr_native_unit_of_measurement = "mi/%"
         self._attr_state = None
         self.start_miles = None
         self.start_soc = None
@@ -151,7 +158,8 @@ class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity):
             except ValueError:
                 self._attr_state = 0.0
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when the vehicle's movement state changes."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -201,7 +209,7 @@ class ContinuousEfficiencySensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "EV Continuous Efficiency"
         self._attr_unique_id = "ev_continuous_efficiency"
-        self._attr_unit_of_measurement = "mi/%"
+        self._attr_native_unit_of_measurement = "mi/%"
         self._attr_state = None
         self.last_miles = None
         self.last_soc = None
@@ -220,7 +228,8 @@ class ContinuousEfficiencySensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when SoC or charging state changes."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -280,7 +289,7 @@ class IdleEnergyLossSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "EV Idle Energy Loss"
         self._attr_unique_id = "ev_idle_energy_loss"
-        self._attr_unit_of_measurement = "% SoC lost"
+        self._attr_native_unit_of_measurement = "%"
         self._attr_state = 0  # Start tracking from zero
         self.last_soc = None
         self.last_miles = None
@@ -297,7 +306,8 @@ class IdleEnergyLossSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when SoC or odometer changes."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -331,7 +341,7 @@ class HomeEnergyConsumptionPerChargeSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "EV Home Energy Consumption Per Charge"
         self._attr_unique_id = "ev_home_energy_per_charge"
-        self._attr_unit_of_measurement = "kWh"
+        self._attr_native_unit_of_measurement = "kWh"
         self._attr_state = 0  # Start tracking from zero
         self.is_charging = False  # Flag to track if charging session is active
 
@@ -347,7 +357,8 @@ class HomeEnergyConsumptionPerChargeSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when charging power, charging state, cable connection, or public charge detection changes."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -383,7 +394,7 @@ class HomeEnergyConsumptionPerChargeSensor(SensorEntity, RestoreEntity):
             # Reset energy tracking when a new home charging session starts
             self._attr_state = 0
 
-        return self._attr_state  
+        return self._attr_state
 
 class TotalHomeEnergyConsumptionSensor(SensorEntity, RestoreEntity):
     """Sensor to track total accumulated home charging energy consumption across multiple sessions."""
@@ -392,7 +403,7 @@ class TotalHomeEnergyConsumptionSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "Total Home Charging Energy Consumption"
         self._attr_unique_id = "ev_total_home_energy"
-        self._attr_unit_of_measurement = "kWh"
+        self._attr_native_unit_of_measurement = "kWh"
         self._attr_state = 0  # Start tracking from zero
         self.last_session_energy = 0  # Stores the last session energy
 
@@ -408,7 +419,8 @@ class TotalHomeEnergyConsumptionSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when a charging session ends (cable unplugged or energy per charge session updates)."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -441,7 +453,7 @@ class PublicEnergyConsumptionPerSessionSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "EV Public Energy Consumption Per Charge"
         self._attr_unique_id = "ev_public_energy_per_charge"
-        self._attr_unit_of_measurement = "kWh"
+        self._attr_native_unit_of_measurement = "kWh"
         self._attr_state = 0  # Start tracking from zero
         self.is_charging = False  # Track if a public charging session is active
 
@@ -457,7 +469,8 @@ class PublicEnergyConsumptionPerSessionSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when charging power, charging state, cable connection, or public charge detection changes."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -501,7 +514,7 @@ class TotalPublicEnergyConsumptionSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "Total Public Charging Energy Consumption"
         self._attr_unique_id = "ev_total_public_energy"
-        self._attr_unit_of_measurement = "kWh"
+        self._attr_native_unit_of_measurement = "kWh"
         self._attr_state = 0  # Start tracking from zero
         self.last_session_energy = 0  # Stores the last session energy
 
@@ -517,7 +530,8 @@ class TotalPublicEnergyConsumptionSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when a public charging session ends (cable unplugged or energy per charge session updates)."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -550,7 +564,7 @@ class PublicChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "EV Public Charging Cost Per Session"
         self._attr_unique_id = "ev_public_charge_cost_per_session"
-        self._attr_unit_of_measurement = "GBP"
+        self._attr_native_unit_of_measurement = "GBP"
         self._attr_state = 0  # Start tracking from zero
         self.last_session_energy = 0  # Stores the last session energy
         self.hass = hass  # Home Assistant instance to send notifications
@@ -567,7 +581,8 @@ class PublicChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when energy per session, cost per kWh, or public charging status changes."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -597,7 +612,7 @@ class PublicChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
             total_cost = self.last_session_energy * cost_per_kwh
             self._attr_state = round(total_cost, 2)  # Store the cost of the last session
 
-        return self._attr_state  
+        return self._attr_state
 
     async def send_push_notification(self, session_energy):
         """Send a push notification when a public charging session ends."""
@@ -627,7 +642,7 @@ class TotalPublicChargingCostSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "Total Public Charging Cost"
         self._attr_unique_id = "ev_total_public_charge_cost"
-        self._attr_unit_of_measurement = "GBP"
+        self._attr_native_unit_of_measurement = "GBP"
         self._attr_state = 0  # Start tracking from zero
         self.last_session_cost = 0  # Stores the last session cost
 
@@ -643,7 +658,8 @@ class TotalPublicChargingCostSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when a public charging session ends (cable unplugged or new cost is calculated)."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -667,7 +683,7 @@ class TotalPublicChargingCostSensor(SensorEntity, RestoreEntity):
             self._attr_state += session_cost
             self.last_session_cost = session_cost  # Store last session value to prevent duplicate additions
 
-        return self._attr_state  
+        return self._attr_state
 
 class HomeChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
     """Sensor to calculate home charging cost per session with dynamic pricing and error handling."""
@@ -676,7 +692,7 @@ class HomeChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "EV Home Charging Cost Per Session"
         self._attr_unique_id = "ev_home_charge_cost_per_session"
-        self._attr_unit_of_measurement = "GBP"
+        self._attr_native_unit_of_measurement = "GBP"
         self._attr_state = 0  # Start tracking from zero
         self.last_session_energy = 0  # Stores the last session energy
 
@@ -692,7 +708,8 @@ class HomeChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when energy per session, cost per kWh, or home charging status changes."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -733,7 +750,7 @@ class HomeChargingCostPerSessionSensor(SensorEntity, RestoreEntity):
                 f"Home Charging Session Ended: {session_energy:.2f} kWh used at {cost_per_kwh:.2f} GBP/kWh. Total Cost: {self._attr_state:.2f} GBP"
             )
 
-        return self._attr_state  
+        return self._attr_state
 
 class TotalHomeChargingCostSensor(SensorEntity, RestoreEntity):
     """Sensor to track total accumulated home charging cost across multiple sessions."""
@@ -742,7 +759,7 @@ class TotalHomeChargingCostSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "Total Home Charging Cost"
         self._attr_unique_id = "ev_total_home_charge_cost"
-        self._attr_unit_of_measurement = "GBP"
+        self._attr_native_unit_of_measurement = "GBP"
         self._attr_state = 0  # Start tracking from zero
         self.last_session_cost = 0  # Stores the last session cost
 
@@ -758,7 +775,8 @@ class TotalHomeChargingCostSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when a home charging session ends (cable unplugged or new cost is calculated)."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -786,7 +804,7 @@ class TotalHomeChargingCostSensor(SensorEntity, RestoreEntity):
                 f"Home Charging Session Cost Added: {session_cost:.2f} GBP | Total Home Charging Cost: {self._attr_state:.2f} GBP"
             )
 
-        return self._attr_state  
+        return self._attr_state
 
 class HomeChargingSavingsPerSessionSensor(SensorEntity, RestoreEntity):
     """Sensor to calculate home charging savings per session compared to Octopus tariff."""
@@ -795,7 +813,7 @@ class HomeChargingSavingsPerSessionSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "EV Home Charging Savings Per Session"
         self._attr_unique_id = "ev_home_charge_savings_per_session"
-        self._attr_unit_of_measurement = "GBP"
+        self._attr_native_unit_of_measurement = "GBP"
         self._attr_state = 0  # Start tracking from zero
 
         async_track_state_change_event(
@@ -810,7 +828,8 @@ class HomeChargingSavingsPerSessionSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when a home charging session ends."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -858,7 +877,7 @@ class TotalHomeChargingSavingsSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "Total Home Charging Savings"
         self._attr_unique_id = "ev_total_home_charge_savings"
-        self._attr_unit_of_measurement = "GBP"
+        self._attr_native_unit_of_measurement = "GBP"
         self._attr_state = 0  # Start tracking from zero
         self.last_session_savings = 0  # Stores the last session savings
 
@@ -874,7 +893,8 @@ class TotalHomeChargingSavingsSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when a home charging session ends."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -902,7 +922,7 @@ class TotalHomeChargingSavingsSensor(SensorEntity, RestoreEntity):
                 f"Home Charging Savings Added: {session_savings:.2f} GBP | Total Savings: {self._attr_state:.2f} GBP"
             )
 
-        return self._attr_state  
+        return self._attr_state
 
 class ChargeToChargeMilesPerKWhSensor(SensorEntity, RestoreEntity):
     """Sensor to calculate Charge-to-Charge efficiency in miles/kWh based on previous charge cycle."""
@@ -911,7 +931,7 @@ class ChargeToChargeMilesPerKWhSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "Charge-to-Charge Efficiency (Miles/kWh)"
         self._attr_unique_id = "ev_charge_to_charge_miles_per_kwh"
-        self._attr_unit_of_measurement = "mi/kWh"
+        self._attr_native_unit_of_measurement = "mi/kWh"
         self._attr_state = None  # Efficiency starts as unknown
         self.last_miles = None
         self.last_energy = None
@@ -929,7 +949,8 @@ class ChargeToChargeMilesPerKWhSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when odometer, energy consumption, or charging state changes."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
@@ -971,24 +992,7 @@ class ChargeToChargeMilesPerKWhSensor(SensorEntity, RestoreEntity):
             # Charging session has fully ended
             self.charging_detected = False  # Reset for the next valid charging cycle
 
-        return self._attr_state  
-
-
-    """Sensor: Charging cost per kWh based on charging mode."""
-
-    def __init__(self, hass: HomeAssistant):
-        self.hass = hass
-        self._attr_name = "EV Charging Cost per kWh"
-        self._attr_unique_id = "ev_charging_cost_per_kwh"
-        self._attr_unit_of_measurement = "£/kWh"
-        self._attr_state = None
-
-    @property
-    def state(self):
-        charge_mode = self.hass.states.get("select.ohme_epod_charge_mode")
-        if charge_mode and charge_mode.state == "smart_charge":
-            return 0.07
-        return get_float_state(self.hass, "sensor.octopus_electricity_current_rate")
+        return self._attr_state
 
 class DriveToDriveMilesPerKWhSensor(SensorEntity, RestoreEntity):
     """Sensor to calculate Drive-to-Drive efficiency in miles/kWh based on energy used while driving."""
@@ -999,7 +1003,7 @@ class DriveToDriveMilesPerKWhSensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "Drive-to-Drive Efficiency (Miles/kWh)"
         self._attr_unique_id = "ev_drive_to_drive_miles_per_kwh"
-        self._attr_unit_of_measurement = "mi/kWh"
+        self._attr_native_unit_of_measurement = "mi/kWh"
         self._attr_state = "unknown"  # Proper initialization for numeric sensor
         self.last_miles = None
         self.last_energy = None
@@ -1008,7 +1012,7 @@ class DriveToDriveMilesPerKWhSensor(SensorEntity, RestoreEntity):
 
         async_track_state_change_event(
             hass,
-            ["sensor.myida_odometer", "sensor.myida_energy_used", "sensor.myida_battery_level", "binary_sensor.myida_vehicle_moving"],
+            ["sensor.myida_odometer", "sensor.myida_battery_level", "binary_sensor.myida_vehicle_moving"],
             self.async_update_callback
         )
 
@@ -1018,14 +1022,15 @@ class DriveToDriveMilesPerKWhSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)  # Ensure restored state is a valid float
 
-    async def async_update_callback(self, entity_id, old_state, new_state):
+    #async def async_update_callback(self, entity_id, old_state, new_state):
+    async def async_update_callback(self, entity_id):
         """Triggered when odometer, energy consumption, battery level, or driving state changes."""
         self.async_schedule_update_ha_state(force_refresh=True)
 
     @property
     def state(self):
         miles_now = get_float_state(self.hass, "sensor.myida_odometer")
-        energy_used = get_float_state(self.hass, "sensor.myida_energy_used")  # Direct energy measurement
+        #energy_used = get_float_state(self.hass, "sensor.myida_energy_used")  # Direct energy measurement
         battery_level = get_float_state(self.hass, "sensor.myida_battery_level")
         vehicle_moving = self.hass.states.get("binary_sensor.myida_vehicle_moving")
 
@@ -1044,18 +1049,18 @@ class DriveToDriveMilesPerKWhSensor(SensorEntity, RestoreEntity):
             if self.last_miles is not None and self.last_energy is not None:
                 miles_travelled = miles_now - self.last_miles
 
-                if energy_used is not None:
-                    total_energy_used = energy_used  # Prefer direct measurement
-                else:
-                    # Estimate energy used from battery SoC drop
-                    if self.last_soc is not None:
-                        soc_drop = self.last_soc - battery_level
-                        if soc_drop > 0:
-                            total_energy_used = (soc_drop / 100) * self.BATTERY_CAPACITY_KWH
-                        else:
-                            total_energy_used = None  # No valid energy change
+                #if energy_used is not None:
+                #    total_energy_used = energy_used  # Prefer direct measurement
+                #else:
+                # Estimate energy used from battery SoC drop
+                if self.last_soc is not None:
+                    soc_drop = self.last_soc - battery_level
+                    if soc_drop > 0:
+                        total_energy_used = (soc_drop / 100) * self.BATTERY_CAPACITY_KWH
                     else:
-                        total_energy_used = None
+                        total_energy_used = None  # No valid energy change
+                else:
+                    total_energy_used = None
 
                 if total_energy_used is not None and total_energy_used > 0:
                     efficiency = miles_travelled / total_energy_used
@@ -1073,140 +1078,87 @@ class DriveToDriveMilesPerKWhSensor(SensorEntity, RestoreEntity):
             self.last_soc = battery_level
             self.driving_detected = False  # Reset for the next valid drive cycle
 
-        return self._attr_state  
-
-class ContinuousMilesPerKWhSensor(SensorEntity, RestoreEntity):
-    """Continuously calculates efficiency in miles/kWh, ignoring charging and SoC increases."""
-
-    BATTERY_CAPACITY_KWH = 77  # Fixed battery capacity assumption
-
-    def __init__(self, hass: HomeAssistant):
-        self.hass = hass
-        self._attr_name = "Continuous Efficiency (Miles/kWh)"
-        self._attr_unique_id = "ev_continuous_miles_per_kwh"
-        self._attr_unit_of_measurement = "mi/kWh"
-        self._attr_state = "unknown"  # Proper initialization for numeric sensor
-        self.last_miles = None
-        self.last_energy = None
-        self.last_soc = None
-
-        async_track_state_change_event(
-            hass,
-            ["sensor.myida_odometer", "sensor.myida_energy_used", "sensor.myida_battery_level", "binary_sensor.myida_vehicle_moving", "switch.myida_charging"],
-            self.async_update_callback
-        )
-
-    async def async_added_to_hass(self):
-        """Restore efficiency value after a restart."""
-        last_state = await self.async_get_last_state()
-        if last_state and last_state.state not in (None, "unknown", "unavailable"):
-            try:
-                self._attr_state = float(last_state.state)  # Ensure restored state is a valid float
-            except ValueError:
-                _LOGGER.warning("ContinuousMilesPerKWhSensor: Failed to restore state, setting to unknown.")
-                self._attr_state = "unknown"
-
-    async def async_update_callback(self, entity_id, old_state, new_state):
-        """Triggered when odometer, energy consumption, battery level, or driving state changes."""
-        self.async_schedule_update_ha_state(force_refresh=True)
-
-    @property
-    def state(self):
-        miles_now = get_float_state(self.hass, "sensor.myida_odometer")
-        energy_used = get_float_state(self.hass, "sensor.myida_energy_used")
-        battery_level = get_float_state(self.hass, "sensor.myida_battery_level")
-        is_moving = self.hass.states.get("binary_sensor.myida_vehicle_moving").state == "on"
-        is_charging = self.hass.states.get("switch.myida_charging").state == "on"
-
-        if miles_now is None or battery_level is None:
-            _LOGGER.warning("ContinuousMilesPerKWhSensor: Missing odometer or battery level data.")
-            return self._attr_state  # Keep last recorded efficiency if data is unavailable
-
-        if is_charging or (self.last_soc is not None and battery_level > self.last_soc):
-            return self._attr_state  # Ignore calculations during charging or SoC increase
-
-        if self.last_miles is not None and self.last_energy is not None:
-            miles_travelled = miles_now - self.last_miles
-
-            if energy_used is not None:
-                total_energy_used = energy_used  # Prefer direct measurement
-            else:
-                # Estimate energy used from battery SoC drop
-                if self.last_soc is not None:
-                    soc_drop = self.last_soc - battery_level
-                    if soc_drop > 0:
-                        total_energy_used = (soc_drop / 100) * self.BATTERY_CAPACITY_KWH
-                    else:
-                        total_energy_used = None  # No valid energy change
-                else:
-                    total_energy_used = None
-
-            if total_energy_used is not None and total_energy_used > 0 and miles_travelled > 0:
-                efficiency = miles_travelled / total_energy_used
-                self._attr_state = round(efficiency, 2)
-
-                _LOGGER.info(
-                    f"Continuous Efficiency Updated: {miles_travelled:.2f} miles / {total_energy_used:.2f} kWh = {self._attr_state:.2f} mi/kWh"
-                )
-
-        # Update tracking variables for the next calculation
-        if is_moving:
-            self.last_miles = miles_now
-            self.last_energy = energy_used if energy_used is not None else self.last_energy
-            self.last_soc = battery_level
-
         return self._attr_state
 
+# class ContinuousMilesPerKWhSensor(SensorEntity, RestoreEntity):
+#     """Continuously calculates efficiency in miles/kWh, ignoring charging and SoC increases."""
 
-    """Sensor: Potential savings per charging session."""
+#     BATTERY_CAPACITY_KWH = 77  # Fixed battery capacity assumption
 
-    def __init__(self, hass: HomeAssistant):
-        self.hass = hass
-        self._attr_name = "EV Savings Per Charge"
-        self._attr_unit_of_measurement = "£"
-        self._attr_unique_id = "ev_savings_per_charge"
-        self._attr_state = None
+#     def __init__(self, hass: HomeAssistant):
+#         self.hass = hass
+#         self._attr_name = "Continuous Efficiency (Miles/kWh)"
+#         self._attr_unique_id = "ev_continuous_miles_per_kwh"
+#         self._attr_native_unit_of_measurement = "mi/kWh"
+#         self._attr_state = "unknown"  # Proper initialization for numeric sensor
+#         self.last_miles = None
+#         self.last_energy = None
+#         self.last_soc = None
 
-    @property
-    def state(self):
-        energy_used = get_float_state(self.hass, "sensor.ohme_epod_energy")
-        current_rate = get_float_state(self.hass, "sensor.octopus_electricity_current_rate")
-        charge_mode = self.hass.states.get("select.ohme_epod_charge_mode")
-        if charge_mode and charge_mode.state == "smart_charge":
-            optimal_rate = 0.07
-        else:
-            optimal_rate = current_rate
-        if energy_used > 0 and current_rate >= optimal_rate:
-            return round(energy_used * (current_rate - optimal_rate), 2)
-        return 0
+#         async_track_state_change_event(
+#             hass,
+#             ["sensor.myida_odometer", "sensor.myida_battery_level", "binary_sensor.myida_vehicle_moving", "switch.myida_charging"],
+#             self.async_update_callback
+#         )
 
+#     async def async_added_to_hass(self):
+#         """Restore efficiency value after a restart."""
+#         last_state = await self.async_get_last_state()
+#         if last_state and last_state.state not in (None, "unknown", "unavailable"):
+#             try:
+#                 self._attr_state = float(last_state.state)  # Ensure restored state is a valid float
+#             except ValueError:
+#                 _LOGGER.warning("ContinuousMilesPerKWhSensor: Failed to restore state, setting to unknown.")
+#                 self._attr_state = "unknown"
 
+#       #async def async_update_callback(self, entity_id, old_state, new_state):
+#      async def async_update_callback(self, entity_id):
+#         """Triggered when odometer, energy consumption, battery level, or driving state changes."""
+#         self.async_schedule_update_ha_state(force_refresh=True)
 
-    """Sensor: Average miles per kWh (efficiency) across manual public charging sessions."""
+#     @property
+#     def state(self):
+#         miles_now = get_float_state(self.hass, "sensor.myida_odometer")
+#         energy_used = get_float_state(self.hass, "sensor.myida_energy_used")
+#         battery_level = get_float_state(self.hass, "sensor.myida_battery_level")
+#         is_moving = self.hass.states.get("binary_sensor.myida_vehicle_moving").state == "on"
+#         is_charging = self.hass.states.get("switch.myida_charging").state == "on"
 
-    def __init__(self, hass: HomeAssistant):
-        self.hass = hass
-        self._attr_name = "EV Public Charging Avg Efficiency"
-        self._attr_unit_of_measurement = "mi/kWh"
-        self._attr_unique_id = "ev_public_charging_efficiency"
-        self._attr_state = None
+#         if miles_now is None or battery_level is None:
+#             _LOGGER.warning("ContinuousMilesPerKWhSensor: Missing odometer or battery level data.")
+#             return self._attr_state  # Keep last recorded efficiency if data is unavailable
 
-    @property
-    def state(self):
-        data = self.hass.data.get(DOMAIN, {}).get("public_sessions", {})
-        sessions = data.get("sessions", [])
-        if not sessions:
-            return 0
-        total_kwh = 0
-        total_miles = 0
-        for session in sessions:
-            try:
-                kwh = float(session.get("kwh", 0))
-                miles = float(session.get("miles", 0))
-            except ValueError:
-                continue
-            total_kwh += kwh
-            total_miles += miles
-        if total_kwh > 0:
-            return round(total_miles / total_kwh, 2)
-        return 0
+#         if is_charging or (self.last_soc is not None and battery_level > self.last_soc):
+#             return self._attr_state  # Ignore calculations during charging or SoC increase
+
+#         if self.last_miles is not None and self.last_energy is not None:
+#             miles_travelled = miles_now - self.last_miles
+
+#             #if energy_used is not None:
+#             #    total_energy_used = energy_used  # Prefer direct measurement
+#             #else:
+#             # Estimate energy used from battery SoC drop
+#             if self.last_soc is not None:
+#                 soc_drop = self.last_soc - battery_level
+#                 if soc_drop > 0:
+#                     total_energy_used = (soc_drop / 100) * self.BATTERY_CAPACITY_KWH
+#                 else:
+#                     total_energy_used = None  # No valid energy change
+#             else:
+#                 total_energy_used = None
+
+#             if total_energy_used is not None and total_energy_used > 0 and miles_travelled > 0:
+#                 efficiency = miles_travelled / total_energy_used
+#                 self._attr_state = round(efficiency, 2)
+
+#                 _LOGGER.info(
+#                     f"Continuous Efficiency Updated: {miles_travelled:.2f} miles / {total_energy_used:.2f} kWh = {self._attr_state:.2f} mi/kWh"
+#                 )
+
+#         # Update tracking variables for the next calculation
+#         if is_moving:
+#             self.last_miles = miles_now
+#             self.last_energy = total_energy_used if total_energy_used is not None else self.last_energy
+#             self.last_soc = battery_level
+
+#         return self._attr_state
