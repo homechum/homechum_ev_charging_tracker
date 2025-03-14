@@ -16,15 +16,15 @@ async def async_setup(hass, config):
     hass.helpers.discovery.load_platform("sensor", DOMAIN, {}, config)
     return True
 
-def get_float_state(hass: HomeAssistant, entity_id: str, default: float = 0.0) -> float:
-    """Helper to safely get a float value from an entity state."""
+def get_float_state(hass: HomeAssistant, entity_id: str) -> float | None:
+    """Utility to safely get a float state from an entity."""
     state_obj = hass.states.get(entity_id)
-    if state_obj is None or state_obj.state in ["unknown", "unavailable"]:
-        return default
-    try:
-        return float(state_obj.state)
-    except (ValueError, TypeError):
-        return default
+    if state_obj and state_obj.state not in ("unknown", "unavailable", None):
+        try:
+            return float(state_obj.state)
+        except ValueError:
+            return None
+    return None
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     """Set up sensor entities from a config entry."""
@@ -59,16 +59,19 @@ class ChargeToChargeEfficiencySensor(SensorEntity, RestoreEntity):
         self.hass = hass
         self._attr_name = "EV Charge to Charge Efficiency"
         self._attr_unique_id = "ev_charge_to_charge_efficiency"
-        self._attr_unit_of_measurement = "mi/%"
-        self._attr_state = None
-        self.last_miles = None
-        self.last_soc = None
+        self._attr_native_unit_of_measurement = "mi/%"
+        self._attr_state = 0 # Start tracking from zero
+
+        self.last_miles: float | None = None
+        self.last_soc: float | None = None
         self.was_charging = False  # Flag to track if actual charging occurred
+
         _LOGGER.info("Initializing ChargeToChargeEfficiencySensor")
 
+        # Subscribe to state changes using async_track_state_change_event.
         async_track_state_change_event(
             hass,
-            ["binary_sensor.myida_charging_cable_connected", "switch.myida_charging"],  
+            ["binary_sensor.myida_charging_cable_connected", "switch.myida_charging"],
             self.async_update_callback
         )
 
@@ -76,55 +79,77 @@ class ChargeToChargeEfficiencySensor(SensorEntity, RestoreEntity):
         """Restore the last known efficiency value after a restart."""
         last_state = await self.async_get_last_state()
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
-            self._attr_state = float(last_state.state)
-            _LOGGER.info(f"Restored efficiency state: {self._attr_state}")
+            try:
+                self._attr_state = float(last_state.state)
+                _LOGGER.info("Restored efficiency state: %s", self._attr_state)
+            except ValueError:
+                _LOGGER.warning("Stored state was invalid float: %s", last_state.state)
 
-    #async def async_update_callback(self, entity_id, old_state, new_state):
-    async def async_update_callback(self, entity_id):
-        """Triggered when the charging cable is plugged/unplugged or charging state changes."""
-        _LOGGER.debug(f"State change detected in {entity_id}, updating efficiency sensor")
+    async def async_update_callback(self, event):
+        """Triggered whenever the cable sensor or charging switch changes."""
+        entity_id = event.data.get("entity_id")
+        old_state_obj = event.data.get("old_state")
+        new_state_obj = event.data.get("new_state")
+
+        old_state = old_state_obj.state if old_state_obj else None
+        new_state = new_state_obj.state if new_state_obj else None
+
+        _LOGGER.debug(
+            "State change event for %s: %s → %s. Forcing sensor refresh.",
+            entity_id, old_state, new_state
+        )
+        # Force an immediate update of our sensor
         self.async_schedule_update_ha_state(force_refresh=True)
 
     @property
     def state(self):
         """Calculate and return the charge-to-charge efficiency."""
-        cable_connected = self.hass.states.get("binary_sensor.myida_charging_cable_connected")
-        charging = self.hass.states.get("switch.myida_charging")
+        cable_state = self.hass.states.get("binary_sensor.myida_charging_cable_connected")
+        charging_state = self.hass.states.get("switch.myida_charging")
 
-        if cable_connected is None or charging is None:
-            return self._attr_state  # Keep last known efficiency if sensors are unavailable
+        if cable_state is None or charging_state is None:
+            # Entities unavailable; keep the last known efficiency.
+            return self._attr_state
 
-        cable_connected = cable_connected.state == "on"
-        charging = charging.state == "on"
+        cable_connected = (cable_state.state == "on")
+        charging = (charging_state.state == "on")
 
         if cable_connected and charging:
-            # Charging started - Mark this session as "charging detected"
+            # Charging started: Mark this session as "charging detected"
             self.was_charging = True
             return self._attr_state  # Keep last known efficiency while charging
 
         if not cable_connected and self.was_charging:
-            # Charging cable unplugged after a successful charge → Calculate efficiency
+            # Cable unplugged after a successful charge → Calculate efficiency
             miles_now = get_float_state(self.hass, "sensor.myida_odometer")
             soc_now = get_float_state(self.hass, "sensor.myida_battery_level")
 
-            if miles_now is not None and soc_now is not None and self.last_miles is not None and self.last_soc is not None:
-                if soc_now < self.last_soc:  # Ensure SoC has actually dropped
+            if (
+                miles_now is not None
+                and soc_now is not None
+                and self.last_miles is not None
+                and self.last_soc is not None
+            ):
+                if soc_now < self.last_soc:
                     soc_used = self.last_soc - soc_now
                     miles_travelled = miles_now - self.last_miles
-                    self._attr_state = round(miles_travelled / soc_used, 2) if soc_used > 0 else self._attr_state
-                    _LOGGER.info(f"Updated efficiency: {self._attr_state}")
+                    if soc_used > 0:
+                        self._attr_state = round(miles_travelled / soc_used, 2)
+                        _LOGGER.info("Updated efficiency to: %s", self._attr_state)
 
             # Reset charging flag since charging session is complete
             self.was_charging = False
             return self._attr_state  # Keep updated efficiency value
 
+        # If cable is unplugged (or becomes unplugged) but we never flagged a charging session,
+        # we store the current miles & SoC as the baseline for the next charge.
         if not cable_connected:
             # Cable unplugged but was NOT charging → Store values for next charge cycle
             self.last_miles = get_float_state(self.hass, "sensor.myida_odometer")
             self.last_soc = get_float_state(self.hass, "sensor.myida_battery_level")
 
         return self._attr_state  # Keep last efficiency value until next valid charge cycle
-
+    
 class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity):
     """Sensor to track drive-to-drive efficiency, restoring state on restart."""
 
@@ -133,7 +158,7 @@ class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity):
         self._attr_name = "EV Drive to Drive Efficiency"
         self._attr_unique_id = "ev_drive_to_drive_efficiency"
         self._attr_native_unit_of_measurement = "mi/%"
-        self._attr_state = None
+        self._attr_state = 0 # Start tracking from zero
         self.start_miles = None
         self.start_soc = None
         self.last_state_valid = False  # Track if the last state was valid
@@ -210,7 +235,7 @@ class ContinuousEfficiencySensor(SensorEntity, RestoreEntity):
         self._attr_name = "EV Continuous Efficiency"
         self._attr_unique_id = "ev_continuous_efficiency"
         self._attr_native_unit_of_measurement = "mi/%"
-        self._attr_state = None
+        self._attr_state = 0 # Start tracking from zero
         self.last_miles = None
         self.last_soc = None
         self.is_charging = False  # Track if the car is charging
