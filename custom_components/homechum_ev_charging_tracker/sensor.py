@@ -1,14 +1,15 @@
 """Sensor platform for HomeChum EV Charging Tracker."""
 import logging
+import asyncio
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.helpers.event import async_track_state_change_event
-import asyncio
+from homeassistant.helpers.event import (async_track_state_change_event, async_call_later)
 from homeassistant.helpers.entity import Entity
 
 DOMAIN = "homechum_ev_charging_tracker"
-
+# Delay to calculate drive to drive efficiency in sec
+DEBOUNCE_DELAY_SECONDS = 900
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup(hass, config):
@@ -34,7 +35,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         ChargeToChargeEfficiencySensor(hass),
         DriveToDriveEfficiencySensor(hass),
         ContinuousEfficiencySensor(hass),
-        IdleEnergyLossSensor(hass),
+        IdleSoCLossSensor(hass),
         HomeEnergyConsumptionPerChargeSensor(hass),
         PublicEnergyConsumptionPerSessionSensor(hass),
         TotalPublicEnergyConsumptionSensor(hass),
@@ -162,6 +163,9 @@ class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity):
         self.start_miles = None
         self.start_soc = None
         self.last_state_valid = False  # Track if the last state was valid
+       
+        # Keep reference to any scheduled "stop finalization" call
+        self._stop_debounce_task = None
 
         _LOGGER.debug("DriveToDriveEfficiencySensor initialized.")
 
@@ -183,9 +187,20 @@ class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity):
             except ValueError:
                 self._attr_state = 0.0
 
-    #async def async_update_callback(self, entity_id, old_state, new_state):
-    async def async_update_callback(self, entity_id):
-        """Triggered when the vehicle's movement state changes."""
+    async def async_update_callback(self, event):
+        """Triggered whenever the sensor value changes."""
+        entity_id = event.data.get("entity_id")
+        old_state_obj = event.data.get("old_state")
+        new_state_obj = event.data.get("new_state")
+
+        old_state = old_state_obj.state if old_state_obj else None
+        new_state = new_state_obj.state if new_state_obj else None
+
+        _LOGGER.debug(
+            "State change event for %s: %s → %s. Forcing sensor refresh.",
+            entity_id, old_state, new_state
+        )
+        # Force an immediate update of our sensor
         self.async_schedule_update_ha_state(force_refresh=True)
 
     @property
@@ -227,20 +242,20 @@ class DriveToDriveEfficiencySensor(SensorEntity, RestoreEntity):
         return self._attr_state  # Maintain efficiency value while stopped
 
 class ContinuousEfficiencySensor(SensorEntity, RestoreEntity):
-
     """Sensor to track real-time efficiency (Miles per 1% SoC) continuously, only when SoC decreases."""
-
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
         self._attr_name = "EV Continuous Efficiency"
         self._attr_unique_id = "ev_continuous_efficiency"
         self._attr_native_unit_of_measurement = "mi/%"
-        self._attr_state = 0 # Start tracking from zero
+        self._attr_state = None
+
         self.last_miles = None
         self.last_soc = None
-        self.is_charging = False  # Track if the car is charging
-        self.idle_energy_loss_detected = False  # Track if energy was lost while idle
+        self.is_charging = False
+        self.idle_energy_loss_detected = False
 
+        # Subscribe to changes in battery level and charging state
         async_track_state_change_event(
             hass,
             ["sensor.myida_battery_level", "switch.myida_charging"],
@@ -251,63 +266,71 @@ class ContinuousEfficiencySensor(SensorEntity, RestoreEntity):
         """Restore the last known efficiency value after a restart."""
         last_state = await self.async_get_last_state()
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
-            self._attr_state = float(last_state.state)
+            try:
+                self._attr_state = float(last_state.state)
+            except ValueError:
+                _LOGGER.warning("Stored state was invalid float: %s", last_state.state)
+                self._attr_state = None
 
-    #async def async_update_callback(self, entity_id, old_state, new_state):
-    async def async_update_callback(self, entity_id):
-        """Triggered when SoC or charging state changes."""
+    async def async_update_callback(self, event):
+        """Triggered when the battery level or charging switch changes. """
+        entity_id = event.data.get("entity_id")
+        _LOGGER.debug("State change event from %s. Scheduling efficiency update.", entity_id)
+
+        # Force the sensor state to recalc
         self.async_schedule_update_ha_state(force_refresh=True)
 
     @property
     def state(self):
+        """Calculate or return the last-known continuous efficiency (mi/%)."""
         miles_now = get_float_state(self.hass, "sensor.myida_odometer")
         soc_now = get_float_state(self.hass, "sensor.myida_battery_level")
-        charging = self.hass.states.get("switch.myida_charging")
+        charging_state = self.hass.states.get("switch.myida_charging")
 
-        if miles_now is None or soc_now is None or charging is None:
-            return self._attr_state  # Keep the last known efficiency if values are unavailable
+        if miles_now is None or soc_now is None or charging_state is None:
+            return self._attr_state  # Keep last known value if data is missing
 
-        charging = charging.state == "on"
+        charging = (charging_state.state == "on")
 
         if charging:
-            # Charging started, retain last known efficiency
+            # If we are charging, just preserve current efficiency and note that we're charging.
             self.is_charging = True
-            return self._attr_state  # Do not calculate efficiency during charging
+            return self._attr_state
 
+        # If we haven't recorded a baseline yet, record the current values.
         if self.last_soc is None or self.last_miles is None:
-            # First time tracking, initialize values
             self.last_miles = miles_now
             self.last_soc = soc_now
-            return self._attr_state  # No calculation yet
+            return self._attr_state
 
+        # If SoC is decreasing, we do the main efficiency calculation
         if soc_now < self.last_soc:
-            # SOC is decreasing (discharging), calculate efficiency
-            self.is_charging = False  # Reset charging flag
+            self.is_charging = False
             soc_used = self.last_soc - soc_now
             miles_travelled = miles_now - self.last_miles
 
             if miles_travelled == 0:
-                # SOC dropped but the car didn't move (energy loss while idle)
+                # The car didn't move, but SoC dropped => idle energy loss
                 self.idle_energy_loss_detected = True
             else:
-                # Only calculate efficiency when miles were actually driven
                 self.idle_energy_loss_detected = False
                 if soc_used > 0:
                     self._attr_state = round(miles_travelled / soc_used, 2)
 
-            # Update last values for next calculation
+            # Update reference points for next iteration
             self.last_miles = miles_now
             self.last_soc = soc_now
 
+        # If SoC is increasing => charging or was plugged in. Just record new baseline.
         elif soc_now > self.last_soc:
-            # SOC increased (charging detected), do NOT calculate efficiency, just update stored values
             self.last_miles = miles_now
             self.last_soc = soc_now
-            self.is_charging = True  # Set charging flag
+            self.is_charging = True
 
-        return self._attr_state  # Keep last valid efficiency value
+        # If soc_now == self.last_soc, no net change. Nothing to recalc.
+        return self._attr_state
 
-class IdleEnergyLossSensor(SensorEntity, RestoreEntity):
+class IdleSoCLossSensor(SensorEntity, RestoreEntity):
     """Sensor to track energy lost when the car is idle (SoC drops while odometer remains unchanged)."""
 
     def __init__(self, hass: HomeAssistant):
@@ -331,9 +354,10 @@ class IdleEnergyLossSensor(SensorEntity, RestoreEntity):
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
             self._attr_state = float(last_state.state)
 
-    #async def async_update_callback(self, entity_id, old_state, new_state):
-    async def async_update_callback(self, entity_id):
+    async def async_update_callback(self, event):
         """Triggered when SoC or odometer changes."""
+        entity_id = event.data.get("entity_id")
+        _LOGGER.debug("State change event from %s. Scheduling efficiency update.", entity_id)
         self.async_schedule_update_ha_state(force_refresh=True)
 
     @property
@@ -358,7 +382,7 @@ class IdleEnergyLossSensor(SensorEntity, RestoreEntity):
         self.last_soc = soc_now
         self.last_miles = miles_now
         return self._attr_state
-
+    
 class HomeEnergyConsumptionPerChargeSensor(SensorEntity, RestoreEntity):
     """Sensor to track total energy consumed (kWh) per charge session (Home Charging Only)."""
 
