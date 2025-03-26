@@ -15,7 +15,7 @@ from homeassistant.helpers.event import (
 DOMAIN = "homechum_ev_charging_tracker"
 
 # Delay to calculate drive to drive efficiency in sec
-DEBOUNCE_DELAY_SECONDS = 900
+DEBOUNCE_DELAY_SECONDS = 60
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,9 +46,9 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         HomeEnergyConsumptionPerChargeSensor(hass),#WORKING
         AccumulateHomeEnergySensor(hass), #WORKING
         HomeChargeCostSensor(hass), #WORKING
-        TotalHomeChargingCostSensor(hass),
-        HomeChargingSavingsPerSessionSensor(hass),
-        TotalHomeChargingSavingsSensor(hass),
+        TotalHomeChargingCostSensor(hass), #WORKING
+        HomeChargingSavingsPerSessionSensor(hass), #WORKING
+        TotalHomeChargingSavingsSensor(hass), #WORKING
         ChargeToChargeMilesPerKWhSensor(hass)
         # PublicEnergyConsumptionPerSessionSensor(hass),
         # TotalPublicEnergyConsumptionSensor(hass),
@@ -748,7 +748,7 @@ class HomeChargeCostSensor(SensorEntity, RestoreEntity):
         self.async_schedule_update_ha_state(force_refresh=True)
 
     @property
-    def state(self) -> float | None:
+    def state(self):
         """Calculate and return the cost of the charge session."""
         
         # Get the charging status and cable connection state safely
@@ -763,7 +763,7 @@ class HomeChargeCostSensor(SensorEntity, RestoreEntity):
         cable_plugged = cable_connected.state == "on"
 
         # Determine rate per kWh
-        if charging and cable_plugged and not self._was_charging:
+        if charging and cable_plugged:
 
             # Get energy consumption (ensure it's a float)
             energy_kwh = get_float_state(self.hass, "sensor.ev_home_energy_per_charge")
@@ -960,10 +960,10 @@ class HomeChargingSavingsPerSessionSensor(SensorEntity, RestoreEntity):
 
         # Calculate what the cost *would* have been at the full Octopus tariff
         if charging and cable_plugged:
-            _LOGGER.debug("HomeSvngpChrg: Calculating the savings and so far: %s.", savings)
             normal_cost = session_energy * octopus_rate
             savings = normal_cost - session_cost  # Difference = savings
             self._attr_state = round(savings, 2)
+            _LOGGER.debug("HomeSvngpChrg: Calculating the savings and so far: %s.", savings)
             return self._attr_state
 
         if not charging and not cable_connected:
@@ -990,14 +990,14 @@ class TotalHomeChargingSavingsSensor(SensorEntity, RestoreEntity):
         if old_state and old_state.state not in ("unknown", "unavailable", None):
             try:
                 self._attr_state = float(old_state.state)
-                _LOGGER.info("HomeSvngToTCost: Restored accumulated total: %s £", self._attr_state)
+                _LOGGER.info("HomeSvgToTCost: Restored accumulated total: %s £", self._attr_state)
             except ValueError:
-                _LOGGER.warning("HomeSvngToTCost: Invalid stored total: %s", old_state.state)
+                _LOGGER.warning("HomeSvgToTCost: Invalid stored total: %s", old_state.state)
 
         self._unsub = async_track_state_change_event(
             self.hass,
             [
-                "sensor.ev_home_charge_savings_per_session",
+                "sensor.ev_home_charging_savings_per_session",
             ],
             self.async_update_callback
         )
@@ -1024,7 +1024,7 @@ class TotalHomeChargingSavingsSensor(SensorEntity, RestoreEntity):
         if diff > 0:
             self._attr_state += diff
             _LOGGER.debug(
-                "HomeECToTCost: Home energy cost per session changed from %.2f £ to %.2f £ → added %.2f £. New total: %.2f £",
+                "HomeSvgToTCost: Home energy cost per session changed from %.2f £ to %.2f £ → added %.2f £. New total: %.2f £",
                 old_val, new_val, diff, self._attr_state
             )
             self.async_schedule_update_ha_state(force_refresh=True)
@@ -1032,7 +1032,7 @@ class TotalHomeChargingSavingsSensor(SensorEntity, RestoreEntity):
             # If new_val <= old_val, likely a reset or no net increase;
             # we do not subtract from the total or do anything else.
             _LOGGER.debug(
-                "HomeECToTCost: No net increase. Old=%.2f £, New=%.2f £; ignoring difference=%.2f £",
+                "HomeSvgToTCost: No net increase. Old=%.2f £, New=%.2f £; ignoring difference=%.2f £",
                 old_val, new_val, diff
             )
 
@@ -1146,8 +1146,22 @@ class ChargeToChargeMilesPerKWhSensor(SensorEntity, RestoreEntity):
 
         if cable_connected and charging:
             # Charging started: Mark this session as "charging detected"
+            # Reset charging flag since charging session is complete
+            self.was_charging = True
+            return self._attr_state  # Keep updated efficiency value
+
+        if not charging and not cable_connected and self.was_charging:
+            # Cable unplugged after a successful charge → Calculate efficiency
+            miles_now = get_float_state(self.hass, "sensor.myida_odometer")
+            kwh_now = get_float_state(self.hass, "sensor.total_ev_home_energy")
+            _LOGGER.debug("C2C MilesPerKWh Effcny: status of was_charging when EV charging finished: %s", self.was_charging)
+
+            if miles_now is None or kwh_now is None:
+                _LOGGER.warning("C2C MilesPerKWh Effcny: Odometer or battery level sensor unavailable.")
+                return self._attr_state
+
             _LOGGER.debug("C2C MilesPerKWh Effcny: status of was_charging when EV charging started: %s", self.was_charging)
-            if not self.was_charging:
+            if self.was_charging:
                 _LOGGER.debug("C2C MilesPerKWh Effcny: C2C Efficiency calcualtion started")
                 miles_now = get_float_state(self.hass, "sensor.myida_odometer")
                 _LOGGER.debug("C2C MilesPerKWh Effcny: C2C Efficiency calcualtion started miles_now: %s", miles_now)
@@ -1172,31 +1186,17 @@ class ChargeToChargeMilesPerKWhSensor(SensorEntity, RestoreEntity):
                 if kwh_used > 0:
                     self._attr_state = round(miles_travelled / kwh_used, 2)
                     _LOGGER.info("C2C MilesPerKWh Effcny: Updated efficiency: %s mi/%% (miles=%s, kwh_used=%s)", self._attr_state, miles_travelled, kwh_used)
+                    # Store new values for the next charge cycle
+                    self.hass.async_create_task(self.store_initial_values())
+                    _LOGGER.info("C2C MilesPerKWh Effcny: One charging cycle complete and stored the current miles: %s and KWh: %s for next cycle", miles_now, kwh_now)
+                    _LOGGER.debug("C2C MilesPerKWh Effcny: Charging session complete and start miles recorded as = %s mi", miles_now)
+                    _LOGGER.debug("C2C MilesPerKWh Effcny: Charging session complete and start Kwh recorded as = %s KWh", kwh_now)
 
-                self.was_charging = True
+                self.was_charging = False
                 return self._attr_state  # Updated efficiency value
+
             return self._attr_state #Preserve previous value
 
-        if not charging and not cable_connected and self.was_charging:
-            # Cable unplugged after a successful charge → Calculate efficiency
-            miles_now = get_float_state(self.hass, "sensor.myida_odometer")
-            kwh_now = get_float_state(self.hass, "sensor.total_ev_home_energy")
-            _LOGGER.debug("C2C MilesPerKWh Effcny: status of was_charging when EV charging finished: %s", self.was_charging)
-
-            # Store new values for the next charge cycle
-            self.hass.async_create_task(self.store_initial_values())
-            _LOGGER.info("C2C MilesPerKWh Effcny: One charging cycle complete and stored the current miles: %s and KWh: %s for next cycle", miles_now, kwh_now)
-
-            if miles_now is None or kwh_now is None:
-                _LOGGER.warning("C2C MilesPerKWh Effcny: Odometer or battery level sensor unavailable.")
-                return self._attr_state
-            _LOGGER.debug("C2C MilesPerKWh Effcny: Charging session complete and start miles recorded as = %s mi", miles_now)
-            _LOGGER.debug("C2C MilesPerKWh Effcny: Charging session complete and start Kwh recorded as = %s KWh", kwh_now)
-
-            # Reset charging flag since charging session is complete
-            self.was_charging = False
-            return self._attr_state  # Keep updated efficiency value
-            
         return self._attr_state  # Keep last efficiency value until next valid charge cycle
 
 class PublicEnergyConsumptionPerSessionSensor(SensorEntity, RestoreEntity):
@@ -1523,86 +1523,3 @@ class DriveToDriveMilesPerKWhSensor(SensorEntity, RestoreEntity):
             self.driving_detected = False  # Reset for the next valid drive cycle
 
         return self._attr_state
-
-# class ContinuousMilesPerKWhSensor(SensorEntity, RestoreEntity):
-#     """Continuously calculates efficiency in miles/kWh, ignoring charging and SoC increases."""
-
-#     BATTERY_CAPACITY_KWH = 77  # Fixed battery capacity assumption
-
-#     def __init__(self, hass: HomeAssistant):
-#         self.hass = hass
-#         self._attr_name = "Continuous Efficiency (Miles/kWh)"
-#         self._attr_unique_id = "ev_continuous_miles_per_kwh"
-#         self._attr_native_unit_of_measurement = "mi/kWh"
-#         self._attr_state = "unknown"  # Proper initialization for numeric sensor
-#         self.last_miles = None
-#         self.last_energy = None
-#         self.last_soc = None
-
-#         async_track_state_change_event(
-#             hass,
-#             ["sensor.myida_odometer", "sensor.myida_battery_level", "binary_sensor.myida_vehicle_moving", "switch.myida_charging"],
-#             self.async_update_callback
-#         )
-
-#     async def async_added_to_hass(self):
-#         """Restore efficiency value after a restart."""
-#         last_state = await self.async_get_last_state()
-#         if last_state and last_state.state not in (None, "unknown", "unavailable"):
-#             try:
-#                 self._attr_state = float(last_state.state)  # Ensure restored state is a valid float
-#             except ValueError:
-#                 _LOGGER.warning("ContinuousMilesPerKWhSensor: Failed to restore state, setting to unknown.")
-#                 self._attr_state = "unknown"
-
-#       #async def async_update_callback(self, entity_id, old_state, new_state):
-#      async def async_update_callback(self, entity_id):
-#         """Triggered when odometer, energy consumption, battery level, or driving state changes."""
-#         self.async_schedule_update_ha_state(force_refresh=True)
-
-#     @property
-#     def state(self):
-#         miles_now = get_float_state(self.hass, "sensor.myida_odometer")
-#         energy_used = get_float_state(self.hass, "sensor.myida_energy_used")
-#         battery_level = get_float_state(self.hass, "sensor.myida_battery_level")
-#         is_moving = self.hass.states.get("binary_sensor.myida_vehicle_moving").state == "on"
-#         is_charging = self.hass.states.get("switch.myida_charging").state == "on"
-
-#         if miles_now is None or battery_level is None:
-#             _LOGGER.warning("ContinuousMilesPerKWhSensor: Missing odometer or battery level data.")
-#             return self._attr_state  # Keep last recorded efficiency if data is unavailable
-
-#         if is_charging or (self.last_soc is not None and battery_level > self.last_soc):
-#             return self._attr_state  # Ignore calculations during charging or SoC increase
-
-#         if self.last_miles is not None and self.last_energy is not None:
-#             miles_travelled = miles_now - self.last_miles
-
-#             #if energy_used is not None:
-#             #    total_energy_used = energy_used  # Prefer direct measurement
-#             #else:
-#             # Estimate energy used from battery SoC drop
-#             if self.last_soc is not None:
-#                 soc_drop = self.last_soc - battery_level
-#                 if soc_drop > 0:
-#                     total_energy_used = (soc_drop / 100) * self.BATTERY_CAPACITY_KWH
-#                 else:
-#                     total_energy_used = None  # No valid energy change
-#             else:
-#                 total_energy_used = None
-
-#             if total_energy_used is not None and total_energy_used > 0 and miles_travelled > 0:
-#                 efficiency = miles_travelled / total_energy_used
-#                 self._attr_state = round(efficiency, 2)
-
-#                 _LOGGER.info(
-#                     f"Continuous Efficiency Updated: {miles_travelled:.2f} miles / {total_energy_used:.2f} kWh = {self._attr_state:.2f} mi/kWh"
-#                 )
-
-#         # Update tracking variables for the next calculation
-#         if is_moving:
-#             self.last_miles = miles_now
-#             self.last_energy = total_energy_used if total_energy_used is not None else self.last_energy
-#             self.last_soc = battery_level
-
-#         return self._attr_state
